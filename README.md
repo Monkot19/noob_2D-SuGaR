@@ -8,7 +8,7 @@ $^1$ TU Darmstadt &nbsp;&nbsp; $^2$ ELIZA &nbsp;&nbsp; $^3$ Max Planck Institute
 
 *Eurographics 2026 (Short Papers)*
 
-[![Project Page](https://img.shields.io/badge/Project_Page-Coming_Soon-blue)](.) &nbsp;&nbsp; [![arXiv](https://img.shields.io/badge/arXiv-Coming_Soon-red)](.)
+[![Project Page](https://img.shields.io/badge/Project_Page-Live-blue)](https://divyam10.github.io/2D-SuGaR-page/) &nbsp;&nbsp; [![arXiv](https://img.shields.io/badge/arXiv-Coming_Soon-red)](.)
 
 <br>
 <br>
@@ -34,7 +34,7 @@ novel view synthesis.
 ## TODO
 
 - [ ] Release arXiv paper
-- [ ] Release project page
+- [x] Release project page
 - [ ] Attach DTU reconstructions
 - [x] Release training and evaluation code
 
