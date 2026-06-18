@@ -8,7 +8,7 @@ $^1$ TU Darmstadt &nbsp;&nbsp; $^2$ ELIZA &nbsp;&nbsp; $^3$ Max Planck Institute
 
 *Eurographics 2026 (Short Papers)*
 
-[![Project Page](https://img.shields.io/badge/Project_Page-Live-blue)](https://divyam10.github.io/2D-SuGaR-page/) &nbsp;&nbsp; [![arXiv](https://img.shields.io/badge/preprint-2605.00569-red)](https://arxiv.org/abs/2605.00569)
+[![Project Page](https://img.shields.io/badge/Project_Page-Live-blue)](https://divyam10.github.io/2D-SuGaR-page/) &nbsp;&nbsp; [![DOI](https://img.shields.io/badge/DOI-10.2312%2Fegs.20261022-green)](https://doi.org/10.2312/egs.20261022) &nbsp;&nbsp; [![arXiv](https://img.shields.io/badge/preprint-2605.00569-red)](https://arxiv.org/abs/2605.00569)
 
 <br>
 <br>
