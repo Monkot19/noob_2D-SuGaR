@@ -17,7 +17,7 @@ from PIL import Image
 from typing import NamedTuple
 from scene.colmap_loader import read_extrinsics_text, read_intrinsics_text, qvec2rotmat, \
     read_extrinsics_binary, read_intrinsics_binary, read_points3D_binary, read_points3D_text, \
-    read_points3D_text_with_tracks
+    read_points3D_text_with_tracks, read_points3D_binary_with_tracks
 from utils.graphics_utils import getWorld2View2, focal2fov, fov2focal
 import numpy as np
 import json
@@ -27,6 +27,13 @@ from plyfile import PlyData, PlyElement
 from utils.sh_utils import SH2RGB
 from scene.gaussian_model import BasicPointCloud
 from scene.point_generator import gaussian_generator
+from scene.dense_prior_utils import (
+    estimate_depth_scale,
+    reshape_confidence,
+    sanitize_normals,
+    validate_dense_image_order,
+    validate_dense_points_match_ply,
+)
 
 class CameraInfo(NamedTuple):
     uid: int
@@ -176,6 +183,122 @@ def storePly(path, xyz, rgb, normals=None):
     ply_data = PlyData([vertex_element])
     ply_data.write(path)
 
+
+def readTracklessDensePrior(path, cam_infos, cam_intrinsics, ply_path,
+                            initialization_prior):
+    if initialization_prior != "monocular_depth_normal":
+        raise ValueError(
+            "Trackless dense data currently supports only "
+            "--initialization_prior monocular_depth_normal"
+        )
+
+    sparse_path = os.path.join(path, "sparse", "0")
+    points_path = os.path.join(sparse_path, "points3D_all.npy")
+    colors_path = os.path.join(sparse_path, "pointsColor_all.npy")
+    confidence_paths = [
+        os.path.join(sparse_path, "confidence.npy"),
+        os.path.join(sparse_path, "confidence_dsp.npy"),
+    ]
+
+    if not os.path.exists(colors_path):
+        raise FileNotFoundError(
+            f"Trackless dense initialization requires {colors_path} to validate "
+            "the image-to-dense-map order"
+        )
+
+    print(f"No COLMAP tracks found; using trackless dense points from {points_path}")
+    source_pcd = fetchPly(ply_path)
+    dense_points = np.load(points_path, mmap_mode="r")
+    dense_colors = np.load(colors_path, mmap_mode="r")
+    if dense_points.ndim != 4 or dense_points.shape[-1] != 3:
+        raise ValueError(
+            f"points3D_all.npy must have shape (N,H,W,3), got {dense_points.shape}"
+        )
+
+    max_xyz_error = validate_dense_points_match_ply(dense_points, source_pcd.points)
+    print(f"Dense XYZ/PLY validation passed; sampled max error={max_xyz_error:.3g}")
+
+    dense_indices, color_errors, channel_order = validate_dense_image_order(
+        cam_infos, dense_colors
+    )
+    print(f"Dense image order validated with {channel_order} colors")
+    for cam_info, dense_index, color_error in zip(
+        cam_infos, dense_indices, color_errors
+    ):
+        print(
+            f"  {cam_info.image_name}: dense_index={dense_index}, "
+            f"color_MAE={color_error:.4f}"
+        )
+
+    confidence = None
+    for confidence_path in confidence_paths:
+        if os.path.exists(confidence_path):
+            confidence = reshape_confidence(
+                np.load(confidence_path, mmap_mode="r"), dense_points.shape
+            )
+            print(f"Using dense confidence from {confidence_path}")
+            break
+
+    image_depth_scale_map = {}
+    metric_dense_normals = np.empty(dense_points.shape, dtype=np.float32)
+    dense_height, dense_width = dense_points.shape[1:3]
+
+    for cam_info, dense_index in zip(cam_infos, dense_indices):
+        if cam_info.depth_map is None or cam_info.world_normal_map is None:
+            raise FileNotFoundError(
+                f"Missing Metric3D depth/normal prior for {cam_info.image_name}; "
+                f"run estimate_depth_normal_priors.py -s {path} first"
+            )
+
+        dense_confidence = None if confidence is None else confidence[dense_index]
+        scale, sample_count, relative_mad = estimate_depth_scale(
+            dense_points[dense_index],
+            cam_info.depth_map,
+            cam_info.R,
+            cam_info.T,
+            confidence=dense_confidence,
+        )
+        image_depth_scale_map[cam_info.image_id] = {
+            "estimated_scale": scale,
+            "estimated_scale_variance": relative_mad,
+        }
+        metric_dense_normals[dense_index] = cv2.resize(
+            cam_info.world_normal_map,
+            (dense_width, dense_height),
+            interpolation=cv2.INTER_LINEAR,
+        )
+        print(
+            f"  {cam_info.image_name}: depth_scale={scale:.6g}, "
+            f"samples={sample_count}, relative_MAD={relative_mad:.4f}"
+        )
+
+    source_normals, source_invalid = sanitize_normals(source_pcd.normals)
+    dense_normals, prior_invalid = sanitize_normals(
+        metric_dense_normals.reshape(-1, 3), fallback_normals=source_normals
+    )
+    if source_invalid or prior_invalid:
+        print(
+            f"[WARN] Invalid normals: source={source_invalid}, "
+            f"Metric3D={prior_invalid}; safe fallbacks were used"
+        )
+
+    num_generated_points = min(75000, len(cam_infos) * 1000)
+    generated_xyz, generated_rgb, generated_normals = gaussian_generator(
+        cam_infos, cam_intrinsics, num_generated_points, image_depth_scale_map
+    )
+    generated_normals, generated_invalid = sanitize_normals(generated_normals)
+    if generated_invalid:
+        print(f"[WARN] Replaced {generated_invalid} invalid generated normals")
+
+    xyz = np.vstack((np.asarray(source_pcd.points), generated_xyz))
+    rgb = np.vstack((np.asarray(source_pcd.colors), generated_rgb / 255.0))
+    normals = np.vstack((dense_normals, generated_normals))
+    print(
+        f"Trackless dense initialization: {len(source_pcd.points)} source + "
+        f"{len(generated_xyz)} Metric3D-generated = {len(xyz)} points"
+    )
+    return BasicPointCloud(points=xyz, colors=rgb, normals=normals)
+
 def readColmapSceneInfo(path, images, eval, initialization_prior, llffhold=8):
     try:
         cameras_extrinsic_file = os.path.join(path, "sparse/0", "images.bin")
@@ -208,7 +331,27 @@ def readColmapSceneInfo(path, images, eval, initialization_prior, llffhold=8):
     if initialization_prior:
         ply_path = os.path.join(path, "sparse/0/points3D.ply")
         txt_path = os.path.join(path, "sparse/0/points3D.txt")
-        xyz, rgb, _, tracks = read_points3D_text_with_tracks(txt_path)
+        bin_path = os.path.join(path, "sparse/0/points3D.bin")
+        if os.path.exists(txt_path):
+            xyz, rgb, _, tracks = read_points3D_text_with_tracks(txt_path)
+        elif os.path.exists(bin_path):
+            print(f"points3D.txt not found at {txt_path}; reading tracks from points3D.bin instead.")
+            xyz, rgb, _, tracks = read_points3D_binary_with_tracks(bin_path)
+        else:
+            dense_points_path = os.path.join(path, "sparse/0/points3D_all.npy")
+            if not os.path.exists(dense_points_path):
+                raise FileNotFoundError(
+                    "Monocular initialization requires points3D.txt, points3D.bin, "
+                    "or a trackless dense points3D_all.npy export"
+                )
+            pcd = readTracklessDensePrior(
+                path, cam_infos, cam_intrinsics, ply_path, initialization_prior
+            )
+            return SceneInfo(point_cloud=pcd,
+                             train_cameras=train_cam_infos,
+                             test_cameras=test_cam_infos,
+                             nerf_normalization=nerf_normalization,
+                             ply_path=ply_path)
 
         # normals = []
         # for track in tracks:
