@@ -6,6 +6,10 @@ import matplotlib.pyplot as plt
 import os
 import sys
 from argparse import ArgumentParser
+from tqdm import tqdm
+
+
+SUPPORTED_IMAGE_EXTENSIONS = ('.png', '.jpg', '.jpeg', '.bmp', '.tif', '.tiff')
 
 
 def run_metric3d(rgb_origin, model):
@@ -91,7 +95,7 @@ def run_metric3d(rgb_origin, model):
 
 
 
-def estimate_scene_depth_normal_priors(path):
+def estimate_scene_depth_normal_priors(path, force=False):
     images_dir = os.path.join(path, 'images')
 
     depth_dir = os.path.join(path, "estimated_dense_depth")
@@ -100,35 +104,55 @@ def estimate_scene_depth_normal_priors(path):
     normal_dir = os.path.join(path, "estimated_dense_normal")
     os.makedirs(normal_dir, exist_ok=True)
 
-    model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_giant2', pretrain=True)
+    image_files = []
+    for filename in sorted(os.listdir(images_dir)):
+        image_path = os.path.join(images_dir, filename)
+        if os.path.isdir(image_path):
+            continue
+        if filename.lower().endswith(SUPPORTED_IMAGE_EXTENSIONS):
+            image_files.append(filename)
+
+    if not image_files:
+        print(f"[WARN] No supported images found in {images_dir}. Supported extensions: {SUPPORTED_IMAGE_EXTENSIONS}")
+        return
+
+    print(f"[INFO] Found {len(image_files)} images in {images_dir}")
+
+    model = torch.hub.load('yvanyin/metric3d', 'metric3d_vit_giant2', pretrain=True, trust_repo=True)
     model.cuda().eval()
 
-    for filename in os.listdir(images_dir):
-        if os.path.isdir(os.path.join(images_dir, filename)):
+    for filename in tqdm(image_files, desc="Estimating depth/normal priors"):
+        image_file = os.path.join(images_dir, filename)
+        output_name = filename.rsplit('.', 1)[0] + '.npy'
+        depth_save_path = os.path.join(depth_dir, output_name)
+        normal_save_path = os.path.join(normal_dir, output_name)
+
+        if not force and os.path.exists(depth_save_path) and os.path.exists(normal_save_path):
             continue
 
-        if filename.endswith('.png'):
-            image_file = os.path.join(images_dir, filename)
-            rgb_origin = cv2.imread(image_file)[:, :, ::-1]
+        image = cv2.imread(image_file)
+        if image is None:
+            print(f"[WARN] Skipping unreadable image: {image_file}")
+            continue
 
-            pred_depth, pred_normal = run_metric3d(rgb_origin, model)
+        rgb_origin = image[:, :, ::-1]
+        pred_depth, pred_normal = run_metric3d(rgb_origin, model)
 
-            depth_file = filename.rsplit('.', 1)[0] + '.npy'
-            depth_save_path = os.path.join(depth_dir, depth_file)
-            np.save(depth_save_path, pred_depth.cpu().numpy())
-
-            normal_file = filename.rsplit('.', 1)[0] + '.npy'
-            normal_save_path = os.path.join(normal_dir, normal_file)
+        np.save(depth_save_path, pred_depth.cpu().numpy())
+        if pred_normal is not None:
             np.save(normal_save_path, pred_normal.cpu().numpy())
+        else:
+            print(f"[WARN] Metric3D did not return normals for {image_file}")
 
 
 if __name__ == "__main__":
     parser = ArgumentParser(description="Training script parameters")
     parser.add_argument('-s', '--source-path', type=str, default='/home/prajwal_chagi/downloads/DTU', help='Path to the source data')
+    parser.add_argument('--force', action='store_true', help='Regenerate priors even if output .npy files already exist')
     args = parser.parse_args(sys.argv[1:])
 
     source_path = args.source_path
-    estimate_scene_depth_normal_priors(source_path)
+    estimate_scene_depth_normal_priors(source_path, force=args.force)
 
 
 
