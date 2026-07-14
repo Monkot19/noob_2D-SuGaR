@@ -195,6 +195,9 @@ def readTracklessDensePrior(path, cam_infos, cam_intrinsics, ply_path,
     sparse_path = os.path.join(path, "sparse", "0")
     points_path = os.path.join(sparse_path, "points3D_all.npy")
     colors_path = os.path.join(sparse_path, "pointsColor_all.npy")
+    sample_indices_path = os.path.join(
+        sparse_path, "points3D_sample_indices.npy"
+    )
     confidence_paths = [
         os.path.join(sparse_path, "confidence.npy"),
         os.path.join(sparse_path, "confidence_dsp.npy"),
@@ -215,7 +218,25 @@ def readTracklessDensePrior(path, cam_infos, cam_intrinsics, ply_path,
             f"points3D_all.npy must have shape (N,H,W,3), got {dense_points.shape}"
         )
 
-    max_xyz_error = validate_dense_points_match_ply(dense_points, source_pcd.points)
+    dense_point_count = int(np.prod(dense_points.shape[:-1]))
+    source_point_count = len(source_pcd.points)
+    source_indices = None
+    if source_point_count != dense_point_count:
+        if not os.path.exists(sample_indices_path):
+            raise FileNotFoundError(
+                f"points3D.ply contains {source_point_count} points while dense XYZ "
+                f"contains {dense_point_count}; sampled initialization requires "
+                f"{sample_indices_path}"
+            )
+        source_indices = np.load(sample_indices_path, mmap_mode="r")
+        print(
+            f"Using {source_point_count} sampled source points via "
+            f"{sample_indices_path}"
+        )
+
+    max_xyz_error = validate_dense_points_match_ply(
+        dense_points, source_pcd.points, point_indices=source_indices
+    )
     print(f"Dense XYZ/PLY validation passed; sampled max error={max_xyz_error:.3g}")
 
     dense_indices, color_errors, channel_order = validate_dense_image_order(
@@ -273,8 +294,14 @@ def readTracklessDensePrior(path, cam_infos, cam_intrinsics, ply_path,
         )
 
     source_normals, source_invalid = sanitize_normals(source_pcd.normals)
-    dense_normals, prior_invalid = sanitize_normals(
-        metric_dense_normals.reshape(-1, 3), fallback_normals=source_normals
+    metric_normals_flat = metric_dense_normals.reshape(-1, 3)
+    source_metric_normals = (
+        metric_normals_flat
+        if source_indices is None
+        else metric_normals_flat[np.asarray(source_indices, dtype=np.int64)]
+    )
+    source_prior_normals, prior_invalid = sanitize_normals(
+        source_metric_normals, fallback_normals=source_normals
     )
     if source_invalid or prior_invalid:
         print(
@@ -292,7 +319,7 @@ def readTracklessDensePrior(path, cam_infos, cam_intrinsics, ply_path,
 
     xyz = np.vstack((np.asarray(source_pcd.points), generated_xyz))
     rgb = np.vstack((np.asarray(source_pcd.colors), generated_rgb / 255.0))
-    normals = np.vstack((dense_normals, generated_normals))
+    normals = np.vstack((source_prior_normals, generated_normals))
     print(
         f"Trackless dense initialization: {len(source_pcd.points)} source + "
         f"{len(generated_xyz)} Metric3D-generated = {len(xyz)} points"

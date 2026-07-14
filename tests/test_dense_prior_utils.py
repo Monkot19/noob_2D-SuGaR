@@ -87,6 +87,30 @@ class DensePriorUtilsTests(unittest.TestCase):
         np.testing.assert_allclose(normals[0], [0.0, 0.0, 1.0])
         np.testing.assert_allclose(normals[1:], fallback[1:])
 
+    def test_validates_sampled_ply_alignment(self):
+        dense = np.arange(72, dtype=np.float32).reshape(2, 3, 4, 3)
+        sample_indices = np.array([0, 5, 11, 23], dtype=np.int64)
+        ply = dense.reshape(-1, 3)[sample_indices].copy()
+
+        self.assertEqual(
+            utils.validate_dense_points_match_ply(
+                dense,
+                ply,
+                point_indices=sample_indices,
+                sample_count=len(sample_indices),
+            ),
+            0.0,
+        )
+
+    def test_rejects_invalid_sample_indices(self):
+        dense = np.arange(72, dtype=np.float32).reshape(2, 3, 4, 3)
+        ply = dense.reshape(-1, 3)[[0, 5]].copy()
+
+        with self.assertRaisesRegex(ValueError, "unique, strictly increasing"):
+            utils.validate_dense_points_match_ply(
+                dense, ply, point_indices=np.array([5, 5], dtype=np.int64)
+            )
+
     def test_reshapes_flat_confidence(self):
         confidence = np.arange(24).reshape(2, 12)
         reshaped = utils.reshape_confidence(confidence, (2, 3, 4, 3))

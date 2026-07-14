@@ -121,17 +121,50 @@ def estimate_depth_scale(world_points, metric_depth, R, T, confidence=None,
     return scale, len(ratios), mad / max(abs(scale), 1e-12)
 
 
-def validate_dense_points_match_ply(dense_points, ply_points, sample_count=4096,
-                                    tolerance=1e-4):
+def validate_dense_points_match_ply(dense_points, ply_points, point_indices=None,
+                                    sample_count=4096, tolerance=1e-4):
     dense = np.asarray(dense_points).reshape(-1, 3)
     ply = np.asarray(ply_points).reshape(-1, 3)
-    if dense.shape != ply.shape:
-        raise ValueError(
-            f"Dense XYZ has {len(dense)} points but points3D.ply has {len(ply)}"
-        )
-    indices = np.linspace(0, len(dense) - 1, min(sample_count, len(dense)), dtype=np.int64)
+
+    if point_indices is None:
+        if dense.shape != ply.shape:
+            raise ValueError(
+                f"Dense XYZ has {len(dense)} points but points3D.ply has {len(ply)}; "
+                "a points3D_sample_indices.npy file is required for a sampled PLY"
+            )
+        selected_dense = dense
+    else:
+        point_indices = np.asarray(point_indices)
+        if point_indices.ndim != 1 or not np.issubdtype(
+            point_indices.dtype, np.integer
+        ):
+            raise ValueError("Dense point sample indices must be a 1D integer array")
+        point_indices = point_indices.astype(np.int64, copy=False)
+        if len(point_indices) != len(ply):
+            raise ValueError(
+                f"Sample index count {len(point_indices)} does not match "
+                f"points3D.ply point count {len(ply)}"
+            )
+        if len(point_indices) and (
+            point_indices[0] < 0
+            or point_indices[-1] >= len(dense)
+            or np.any(np.diff(point_indices) <= 0)
+        ):
+            raise ValueError(
+                "Dense point sample indices must be unique, strictly increasing, "
+                f"and within [0, {len(dense)})"
+            )
+        selected_dense = dense[point_indices]
+
+    if not len(ply):
+        raise ValueError("points3D.ply contains no points")
+    indices = np.linspace(
+        0, len(ply) - 1, min(sample_count, len(ply)), dtype=np.int64
+    )
     errors = np.linalg.norm(
-        dense[indices].astype(np.float64) - ply[indices].astype(np.float64), axis=1
+        selected_dense[indices].astype(np.float64)
+        - ply[indices].astype(np.float64),
+        axis=1,
     )
     if not np.isfinite(errors).all() or np.max(errors) > tolerance:
         raise ValueError(

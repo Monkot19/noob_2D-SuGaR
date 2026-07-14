@@ -1,13 +1,17 @@
-# hot_cell/39：2DGS 与 Metric3D 深度/法线先验实验记录
+# hot_cell/39：普通 2DGS 与 2D-SuGaR 对比实验记录
 
-## 1. 实验目标
+## 1. 实验目的
 
-评估热室场景中，面对铁皮高光和强反射时，Metric3D 单目深度/法线先验是否能改善 2D Gaussian Splatting 的几何与渲染质量。
+只回答一个问题：在铁皮高光、强反射的热室场景中，2D-SuGaR 相比普通 2DGS 是否有改善。
 
-本记录区分两类问题：
+正式对比只设两组：
 
-1. **训练期法线先验损失是否有效**：必须使用同一代码、同一 10 万点初始化和同一随机种子，只改变 `lambda_normal_prior`。
-2. **完整深度/法线初始化方案是否有效**：允许 Metric3D 改变点的初始旋转、增加深度生成点，并使用训练期法线先验。该实验代表完整方法，但不能单独归因到某一个因素。
+| 组别 | 算法 | 共同输入 |
+|---|---|---|
+| P0 | 普通 2DGS | seed=39 从原始 PLY 抽出的同一批 100,000 点 |
+| S1 | 2D-SuGaR | 同一批 100,000 点，并使用 Metric3D 深度/法线先验 |
+
+这是一项“算法整体效果”对比，不要求两种算法内部每一步完全相同。S1 根据深度先验额外生成约 5,000 个点、用法线先验初始化并参与训练，这些属于 2D-SuGaR 方法本身，应保留并在结果中记录。
 
 ## 2. 数据集概况
 
@@ -16,338 +20,217 @@
 | 原始数据路径 | `/root/autodl-tmp/datasets/hot_cell/39` |
 | 图像数量 | 8 |
 | 相机模型 | `PINHOLE` |
-| COLMAP tracks | 无；`images.txt` 中每张图的 observations 均为 0 |
-| `points3D.txt/bin` | 均不存在 |
+| COLMAP tracks | 无；每张图 observations 均为 0 |
 | 原始 PLY 点数 | 1,572,864 |
-| PLY 属性 | `x,y,z,nx,ny,nz,red,green,blue` |
 | `points3D_all.npy` | `(8,384,512,3)` |
 | `pointsColor_all.npy` | `(8,384,512,3)` |
 | `confidence.npy` | `(8,196608)` |
-| 数据性质 | 稠密逐像素世界坐标导出，不是传统稀疏 COLMAP 三角化点云 |
 
-`1,572,864 = 8 × 384 × 512`，且稠密 XYZ 与 PLY 抽样比较的最大误差为 0。图像与稠密颜色图的归一化 MAE 为 0.0046–0.0054，说明两者顺序和内容对齐。
+`1,572,864 = 8 × 384 × 512`。这是逐像素稠密世界坐标，不是传统稀疏 COLMAP 三角化点云。稠密 XYZ 与原始 PLY 对齐，图像与稠密颜色图也已验证顺序一致。
 
-## 3. 代码与随机性
+## 3. 已完成的预实验（不作为最终公平对比）
 
-| 项目 | 内容 |
+2D-SuGaR 已在全部 1,572,864 个源点上完成一次 30k 训练：
+
+| 项目 | 结果 |
 |---|---|
-| 仓库 | `Monkot19/noob_2D-SuGaR` |
-| 正式实验代码提交 | `be9d131 Align prior sampling resolutions` |
-| Trackless 支持提交 | `1873f51 Support trackless dense priors` |
-| 训练随机种子 | Python、NumPy、PyTorch 均固定为 0（`safe_state`） |
-| 10 万点抽样种子 | NumPy `default_rng(39)` |
-| 分辨率 | `-r 2` |
-| 迭代数 | 30,000 |
-| cluster prune | 关闭：`--cluster_prune_iterations -1` |
-
-说明：固定随机种子提高可复现性，但 CUDA 算子仍不保证跨硬件、驱动和库版本逐位一致。
-
-## 4. 已有旧基线：普通 2DGS（参考实验 L0）
-
-此实验在另一台服务器的 `/root/autodl-tmp/noob_2dgs` 中运行。
-
-### 4.1 初始化数据
-
-- 数据集：`/root/autodl-tmp/datasets/hot_cell_39_2dgs_baseline`
-- 从 1,572,864 个 PLY 顶点中，用种子 39 无放回抽样 100,000 点。
-- 原上传目录保持不变。
-- 旧抽样脚本没有保存 indices；若要精确复用，应重新生成并保存 `sample_indices_seed39.npy`。
-
-### 4.2 训练参数
-
-```bash
-python train.py \
-  -s /root/autodl-tmp/datasets/hot_cell_39_2dgs_baseline \
-  -m /root/autodl-tmp/outputs/hot_cell_39_rgb_only_30k_v1 \
-  -r 2 \
-  --iterations 30000 \
-  --depth_ratio 0 \
-  --lambda_dist 0 \
-  --lambda_normal 0.05 \
-  --opacity_cull 0.05 \
-  --densify_from_iter 500 \
-  --densify_until_iter 15000 \
-  --densification_interval 100 \
-  --densify_grad_threshold 0.0002 \
-  --test_iterations 7000 15000 30000 \
-  --save_iterations 7000 15000 30000 \
-  --checkpoint_iterations 7000 15000 30000
-```
-
-### 4.3 解释边界
-
-L0 只能作为历史参考，不能与完整先验实验 C1 构成严格 A/B，原因包括：
-
-- L0 初始化为 100,000 点，C1 初始化为 1,578,311 点；
-- L0 与 C1 使用不同代码仓库；
-- L0 没有 Metric3D 法线损失，C1 同时改变了初始旋转、新增点和训练损失；
-- L0 的训练指标和产物统计尚未补录。
-
-## 5. 已完成实验：完整深度/法线先验（C1）
-
-### 5.1 路径与状态
-
-| 项目 | 内容 |
-|---|---|
-| 数据集 | `/root/autodl-tmp/datasets/hot_cell/39` |
 | 输出目录 | `/root/autodl-tmp/outputs/hot_cell_39_depth_normal_30k_v1` |
 | 状态 | 完成，`TRAIN_RC=0` |
-| 训练耗时 | 6 分 35 秒 |
-| 平均速度 | 75.92 iter/s |
+| 初始点数 | 1,572,864 源点 + 5,447 深度生成点 = 1,578,311 |
+| 最终点数 | 321,024 |
+| 耗时 | 6 分 35 秒 |
+| 7k train PSNR | 48.5635 dB |
+| 15k train PSNR | 49.6099 dB |
+| 30k train PSNR | 53.7983 dB |
 
-### 5.2 方法组成
+这次结果证明 trackless 数据能够训练，也证明法线先验已经生效；但普通 2DGS 使用的是 10 万点，因此这次 157 万点结果只作为预实验，不能直接下结论。
 
-- 使用 `points3D_all.npy` 和置信度估计每个视角的 Metric3D 深度尺度；
-- 保留原始 PLY 的 1,572,864 个位置和颜色；
-- 原始 PLY 的 1,572,864 个法线全部无效/为零，因此用有效的 Metric3D 法线初始化这些点的旋转；
-- 额外生成 5,447 个 Metric3D 深度引导点；
-- 初始总点数为 1,578,311；
-- 从第 1 次迭代开始使用 `lambda_normal_prior=0.1` 的 Metric3D 法线损失；
-- `lambda_normal=0.05` 的 2DGS 原生法线一致性项从第 7001 次迭代开始启用；
-- `lambda_dist=0`，因此没有 distortion loss；
-- 当前实现没有逐像素 Metric3D depth loss，深度只参与初始化尺度和新增点生成。
+当前实现中：
 
-### 5.3 完整命令
+- Metric3D 深度用于估计尺度和生成新增点；
+- Metric3D 法线用于源点旋转初始化，并以 `lambda_normal_prior=0.1` 参与训练；
+- 当前没有逐像素 Metric3D depth loss；
+- `lambda_normal=0.05` 是 2DGS 原生法线一致性项；
+- `lambda_dist=0`，未使用 distortion loss。
 
-```bash
-python train.py \
-  -s /root/autodl-tmp/datasets/hot_cell/39 \
-  -m /root/autodl-tmp/outputs/hot_cell_39_depth_normal_30k_v1 \
-  -r 2 \
-  --iterations 30000 \
-  --initialization_prior monocular_depth_normal \
-  --depth_ratio 0 \
-  --lambda_dist 0 \
-  --lambda_normal 0.05 \
-  --lambda_normal_prior 0.1 \
-  --opacity_cull 0.05 \
-  --densify_from_iter 500 \
-  --densify_until_iter 15000 \
-  --densification_interval 100 \
-  --densify_grad_threshold 0.0002 \
-  --cluster_prune_iterations -1 \
-  --test_iterations 7000 15000 30000 \
-  --save_iterations 7000 15000 30000 \
-  --checkpoint_iterations 7000 15000 30000 \
-  --skip_2dgs_render \
-  --skip_sugar_refine
-```
+## 4. 创建两种算法共用的 100k 数据集
 
-### 5.4 训练指标
-
-以下均为训练视角指标，并非独立测试集指标。
-
-| Iteration | Train L1 | Train PSNR |
-|---:|---:|---:|
-| 7,000 | 0.00247485 | 48.5635 dB |
-| 15,000 | 0.00201026 | 49.6099 dB |
-| 30,000 | 0.00135041 | 53.7983 dB |
-
-最终进度栏：
-
-| 项目 | 数值 |
-|---|---:|
-| Photometric `Loss` EMA | 0.00194 |
-| Distortion loss EMA | 0.00000 |
-| 原生 normal loss EMA | 0.00610 |
-| 最终 Gaussian 数量 | 321,024 |
-
-进度栏中的 `normal` 只表示原生 2DGS 法线一致性项，不包含 Metric3D `normal_prior_loss`。
-
-### 5.5 深度尺度诊断
-
-| 图像 | Scale | Relative MAD |
-|---|---:|---:|
-| `...095` | 0.0721793 | 0.1182 |
-| `...096` | 0.0620185 | 0.0580 |
-| `...097` | 0.0576815 | 0.0440 |
-| `...098` | 0.0746325 | 0.1092 |
-| `...099` | 0.0652717 | 0.0162 |
-| `...100` | 0.0645210 | 0.0246 |
-| `...101` | 0.0686025 | **0.3173** |
-| `...102` | **0.0351145** | 0.0669 |
-
-重点检查 `...101` 的高 MAD，以及 `...102` 相对其他视角明显偏低的尺度。如果结果出现局部拉伸、双层表面或漂浮点，应优先检查这两个视角。
-
-### 5.6 产物
+目标目录：
 
 ```text
-/root/autodl-tmp/outputs/hot_cell_39_depth_normal_30k_v1/train.log
-/root/autodl-tmp/outputs/hot_cell_39_depth_normal_30k_v1/chkpnt7000.pth
-/root/autodl-tmp/outputs/hot_cell_39_depth_normal_30k_v1/chkpnt15000.pth
-/root/autodl-tmp/outputs/hot_cell_39_depth_normal_30k_v1/chkpnt30000.pth
-/root/autodl-tmp/outputs/hot_cell_39_depth_normal_30k_v1/point_cloud/iteration_7000/point_cloud.ply
-/root/autodl-tmp/outputs/hot_cell_39_depth_normal_30k_v1/point_cloud/iteration_15000/point_cloud.ply
-/root/autodl-tmp/outputs/hot_cell_39_depth_normal_30k_v1/point_cloud/iteration_30000/point_cloud.ply
+/root/autodl-tmp/datasets/hot_cell_39_common100k_seed39
 ```
 
-## 6. 下一组严格受控 A/B：训练期法线先验
-
-### 6.1 实验变量
-
-| 实验 | 初始化点 | `initialization_prior` | `lambda_normal_prior` | 目的 |
-|---|---:|---|---:|---|
-| A1：No prior loss | 同一 100,000 点 | 空字符串 | 0.0 | 对照组 |
-| B1：Normal prior loss | 同一 100,000 点 | 空字符串 | 0.1 | 只测试训练期 Metric3D 法线损失 |
-| C1：Full depth+normal | 1,578,311 点 | `monocular_depth_normal` | 0.1 | 已完成的完整方法，非单变量对照 |
-
-A1 与 B1 使用同一份数据目录、同一 PLY、同一 Metric3D 文件、同一代码提交和同一训练随机种子。唯一训练变量是 `lambda_normal_prior`。
-
-注意：必须显式传入 `--initialization_prior ""`，因为当前 2D-SuGaR 默认值是 `monocular_depth_normal`。
-
-### 6.2 创建统一的 100k 数据集
-
-建议目录：
-
-```text
-/root/autodl-tmp/datasets/hot_cell_39_ab100k_seed39
-```
-
-建议在重新抽样时保存 indices，以确保之后可以精确复用：
+下面的脚本使用与旧普通 2DGS baseline 完全相同的 `default_rng(39)` 和排序方式抽样，同时保存索引。`points3D_sample_indices.npy` 仅供 2D-SuGaR 将 10 万点映射回稠密先验；普通 2DGS 会忽略它。
 
 ```bash
+set -euo pipefail
+
 SRC=/root/autodl-tmp/datasets/hot_cell/39
-DST=/root/autodl-tmp/datasets/hot_cell_39_ab100k_seed39
+DST=/root/autodl-tmp/datasets/hot_cell_39_common100k_seed39
 
 if [ -e "$DST" ]; then
     echo "STOP: $DST already exists"
-else
-    mkdir -p "$DST/sparse/0"
-    cp -a "$SRC/images" "$DST/"
-    cp -a "$SRC/estimated_dense_depth" "$DST/"
-    cp -a "$SRC/estimated_dense_normal" "$DST/"
+    exit 1
+fi
 
-    cp -a \
-      "$SRC/sparse/0/cameras.bin" \
-      "$SRC/sparse/0/images.bin" \
-      "$SRC/sparse/0/cameras.txt" \
-      "$SRC/sparse/0/images.txt" \
-      "$DST/sparse/0/"
+mkdir -p "$DST/sparse/0"
+cp -a "$SRC/images" "$DST/"
+cp -a "$SRC/estimated_dense_depth" "$DST/"
+cp -a "$SRC/estimated_dense_normal" "$DST/"
 
-    python - <<'PY'
+for f in \
+    cameras.bin images.bin cameras.txt images.txt \
+    points3D_all.npy pointsColor_all.npy confidence.npy \
+    confidence_dsp.npy non_scaled_focals.npy; do
+    if [ -f "$SRC/sparse/0/$f" ]; then
+        cp -a "$SRC/sparse/0/$f" "$DST/sparse/0/"
+    fi
+done
+
+python - <<'PY'
 from pathlib import Path
 import numpy as np
 from plyfile import PlyData, PlyElement
 
 src = Path("/root/autodl-tmp/datasets/hot_cell/39/sparse/0/points3D.ply")
-out_dir = Path("/root/autodl-tmp/datasets/hot_cell_39_ab100k_seed39/sparse/0")
+out_dir = Path("/root/autodl-tmp/datasets/hot_cell_39_common100k_seed39/sparse/0")
 dst = out_dir / "points3D.ply"
 
 vertices = PlyData.read(str(src))["vertex"].data
 rng = np.random.default_rng(39)
-indices = np.sort(rng.choice(len(vertices), size=min(100_000, len(vertices)), replace=False))
+indices = np.sort(
+    rng.choice(len(vertices), size=min(100_000, len(vertices)), replace=False)
+)
 sampled = vertices[indices].copy()
 
 PlyData([PlyElement.describe(sampled, "vertex")], text=False).write(str(dst))
-np.save(out_dir / "sample_indices_seed39.npy", indices)
+np.save(out_dir / "points3D_sample_indices.npy", indices)
 
 print("source_points:", len(vertices))
 print("sampled_points:", len(sampled))
-print("indices:", out_dir / "sample_indices_seed39.npy")
+print("first_last_indices:", int(indices[0]), int(indices[-1]))
 print("output:", dst)
+print("indices:", out_dir / "points3D_sample_indices.npy")
 print("properties:", sampled.dtype.names)
 PY
+```
+
+预期关键输出为 `source_points: 1572864` 和 `sampled_points: 100000`。
+
+## 5. P0：普通 2DGS
+
+普通 2DGS 仓库使用上一步创建的共同数据集：
+
+```bash
+set -euo pipefail
+
+cd /root/autodl-tmp/noob_2dgs
+
+DATA=/root/autodl-tmp/datasets/hot_cell_39_common100k_seed39
+OUT=/root/autodl-tmp/outputs/hot_cell_39_common100k_2dgs_30k_v1
+
+if [ -e "$OUT" ]; then
+    echo "STOP: $OUT already exists"
+    exit 1
+fi
+
+mkdir -p "$OUT"
+export OMP_NUM_THREADS=8
+
+python train.py \
+  -s "$DATA" \
+  -m "$OUT" \
+  -r 2 \
+  --iterations 30000 \
+  --depth_ratio 0 \
+  --lambda_dist 0 \
+  --lambda_normal 0.05 \
+  --opacity_cull 0.05 \
+  --densify_from_iter 500 \
+  --densify_until_iter 15000 \
+  --densification_interval 100 \
+  --densify_grad_threshold 0.0002 \
+  --test_iterations 7000 15000 30000 \
+  --save_iterations 7000 15000 30000 \
+  --checkpoint_iterations 7000 15000 30000 \
+  2>&1 | tee "$OUT/train.log"
+```
+
+如果旧输出 `/root/autodl-tmp/outputs/hot_cell_39_rgb_only_30k_v1` 确实由同一个 seed=39 脚本生成，可以保留为 P0；但应先确认其输入 PLY 与新共同数据集的 PLY 完全一致。
+
+## 6. S1：2D-SuGaR
+
+先跑 100 次 smoke test。预期日志包含：
+
+- `Using 100000 sampled source points via ...points3D_sample_indices.npy`；
+- `Dense XYZ/PLY validation passed`；
+- 初始总点数约 10.5 万，而不是 157 万；
+- `TRAIN_RC=0`。
+
+```bash
+cd /root/autodl-tmp/2D_SuGaR
+conda activate 2d-sugar
+
+DATA=/root/autodl-tmp/datasets/hot_cell_39_common100k_seed39
+OUT=/root/autodl-tmp/outputs/hot_cell_39_common100k_2dsugar_smoke100_v1
+
+if [ -e "$OUT" ]; then
+    echo "STOP: 输出目录已存在：$OUT"
+else
+    mkdir -p "$OUT"
+    export OMP_NUM_THREADS=8
+
+    python train.py \
+      -s "$DATA" \
+      -m "$OUT" \
+      -r 2 \
+      --iterations 100 \
+      --initialization_prior monocular_depth_normal \
+      --depth_ratio 0 \
+      --lambda_dist 0 \
+      --lambda_normal 0.05 \
+      --lambda_normal_prior 0.1 \
+      --opacity_cull 0.05 \
+      --densify_from_iter 500 \
+      --densify_until_iter 15000 \
+      --densification_interval 100 \
+      --densify_grad_threshold 0.0002 \
+      --cluster_prune_iterations -1 \
+      --test_iterations -1 \
+      --save_iterations 100 \
+      --checkpoint_iterations 100 \
+      --skip_2dgs_render \
+      2>&1 | tee "$OUT/train.log"
+
+    echo "TRAIN_RC=${PIPESTATUS[0]}"
 fi
 ```
 
-### 6.3 A1 与 B1 的共同参数
+smoke test 成功后，只需把输出目录改为 `hot_cell_39_common100k_2dsugar_30k_v1`，把迭代与保存节点恢复为 7k/15k/30k，即可跑正式 S1。
 
-- 仓库：`/root/autodl-tmp/2D_SuGaR`
-- 数据集：`/root/autodl-tmp/datasets/hot_cell_39_ab100k_seed39`
-- 初始化：同一 100,000 点 PLY；随机旋转初始化；不新增 Metric3D 深度点；
-- 训练种子：0；
-- `lambda_normal=0.05`；
-- `lambda_dist=0`；
-- `cluster_prune_iterations=-1`；
-- 保存迭代：7k、15k、30k；
-- 跳过渲染、网格和 SuGaR refine，先比较 point cloud 与训练日志。
+## 7. 对比规则
 
-### 6.4 A1 命令：无 Metric3D 训练损失
+两组保持一致：输入图像、相机、100k 源点、分辨率 `-r 2`、30k 迭代、densification 参数、`lambda_normal=0.05`、`lambda_dist=0`。
 
-```bash
-python train.py \
-  -s /root/autodl-tmp/datasets/hot_cell_39_ab100k_seed39 \
-  -m /root/autodl-tmp/outputs/hot_cell_39_ab100k_no_prior_30k_v1 \
-  -r 2 \
-  --iterations 30000 \
-  --initialization_prior "" \
-  --depth_ratio 0 \
-  --lambda_dist 0 \
-  --lambda_normal 0.05 \
-  --lambda_normal_prior 0 \
-  --opacity_cull 0.05 \
-  --densify_from_iter 500 \
-  --densify_until_iter 15000 \
-  --densification_interval 100 \
-  --densify_grad_threshold 0.0002 \
-  --cluster_prune_iterations -1 \
-  --test_iterations 7000 15000 30000 \
-  --save_iterations 7000 15000 30000 \
-  --checkpoint_iterations 7000 15000 30000 \
-  --skip_2dgs_render \
-  --skip_sugar_refine
-```
+记录以下结果：
 
-### 6.5 B1 命令：只增加 Metric3D 法线损失
+- 7k、15k、30k 的 train L1 和 train PSNR；
+- 初始和最终 Gaussian 数量；
+- 训练时间与显存峰值；
+- 同一视角的 RGB、depth、normal 渲染；
+- 铁皮高光带是否出现漂浮面、双层面或错误几何；
+- 摄像头、支架、管线边缘是否更清晰；
+- 平整墙面是否更平滑，离群点和孔洞是否减少。
 
-```bash
-python train.py \
-  -s /root/autodl-tmp/datasets/hot_cell_39_ab100k_seed39 \
-  -m /root/autodl-tmp/outputs/hot_cell_39_ab100k_normal_prior_30k_v1 \
-  -r 2 \
-  --iterations 30000 \
-  --initialization_prior "" \
-  --depth_ratio 0 \
-  --lambda_dist 0 \
-  --lambda_normal 0.05 \
-  --lambda_normal_prior 0.1 \
-  --opacity_cull 0.05 \
-  --densify_from_iter 500 \
-  --densify_until_iter 15000 \
-  --densification_interval 100 \
-  --densify_grad_threshold 0.0002 \
-  --cluster_prune_iterations -1 \
-  --test_iterations 7000 15000 30000 \
-  --save_iterations 7000 15000 30000 \
-  --checkpoint_iterations 7000 15000 30000 \
-  --skip_2dgs_render \
-  --skip_sugar_refine
-```
+训练 PSNR 只反映对训练图像的拟合，不能单独代表新视角质量。由于只有 8 张图，最终结论应以同视角可视化和几何质量为主；如需严格评价泛化，再补 leave-one-out 实验。
 
-## 7. 比较与验收规则
+## 8. 当前结论状态
 
-### 7.1 定量指标
-
-- 记录 7k、15k、30k 的 train L1 与 train PSNR；
-- 后续增加统一渲染与独立测试视角后，再记录 test PSNR、SSIM、LPIPS；
-- 记录初始和最终 Gaussian 数量、训练时间和显存峰值；
-- C1 的 53.7983 dB 是训练 PSNR，不代表新视角泛化质量。
-
-### 7.2 定性检查
-
-统一检查以下区域：
-
-- 铁皮墙高光带是否产生漂浮面或双层面；
-- 摄像头、支架和管线边缘是否更锐利；
-- 平整墙面是否更平滑且无波纹；
-- `...101` 与 `...102` 对应视角附近是否发生尺度不一致；
-- 点云离群点、薄片噪声和空洞数量；
-- 新视角渲染中高光是否被错误固化为几何。
-
-### 7.3 可以回答的问题
-
-- A1 vs B1：训练期 Metric3D 法线损失的净作用；
-- B1 vs C1：完整初始化带来的增量现象，但由于点数和旋转初始化不同，仍不是严格单变量实验；
-- L0 vs A1：可以观察代码库差异，但不能只归因到先验。
-
-## 8. 待补录
-
-- [ ] AutoDL GPU、显存、驱动、CUDA 和 PyTorch 版本；
-- [ ] L0 普通 2DGS 的 7k/15k/30k 指标、最终点数和耗时；
-- [ ] A1 受控无先验结果；
-- [ ] B1 受控法线先验结果；
-- [ ] 三组 iteration 30000 点云截图；
-- [ ] 同一视角的 RGB/normal/depth 渲染对比；
-- [ ] 独立测试视角或 leave-one-out 指标；
-- [ ] 对 `...101` 和 `...102` 尺度异常的敏感性实验。
-
+- [x] 原始 157 万点 2D-SuGaR 预实验成功；
+- [x] 2D-SuGaR 已支持通过采样索引读取同一批 100k 源点；
+- [ ] 创建共同 100k 数据集；
+- [ ] S1 100 次 smoke test；
+- [ ] P0 普通 2DGS 30k；
+- [ ] S1 2D-SuGaR 30k；
+- [ ] 汇总指标与同视角可视化，判断高光场景是否改善。
