@@ -56,13 +56,42 @@ def gaussian_generator(cam_infos, cam_intrinsics, num_points, image_depth_scale_
     Usually, number of returned points is 33% lower than num_points
     """
 
-    num_images = len(cam_infos)
+    scaled_cameras = []
+    skipped_image_ids = []
+    for cam_info in cam_infos:
+        scale_info = image_depth_scale_map.get(cam_info.image_id)
+        try:
+            depth_scale = float(scale_info["estimated_scale"])
+        except (KeyError, TypeError, ValueError):
+            depth_scale = np.nan
+
+        if np.isfinite(depth_scale) and depth_scale > 0:
+            scaled_cameras.append((cam_info, depth_scale))
+        else:
+            skipped_image_ids.append(cam_info.image_id)
+
+    if skipped_image_ids:
+        print(
+            f"[WARN] Skipping depth-based point generation for "
+            f"{len(skipped_image_ids)}/{len(cam_infos)} cameras without a "
+            f"finite, positive depth scale; image_ids={skipped_image_ids}"
+        )
+
+    if not scaled_cameras:
+        raise ValueError(
+            "No cameras have a finite, positive depth scale for point generation"
+        )
+
+    num_images = len(scaled_cameras)
     num_points_per_image = num_points // num_images
 
-    assert num_points >= num_images, "Generate more points than number of images"
+    if num_points < num_images:
+        raise ValueError(
+            "Generate at least one point per camera with a valid depth scale"
+        )
 
     xyzs, rgbs, normals = [], [], []
-    for cam_info in cam_infos:
+    for cam_info, depth_scale in scaled_cameras:
         image = np.asarray(cam_info.image)
         if image.ndim != 3 or image.shape[-1] < 3:
             raise ValueError(f"Expected an RGB image, got {image.shape}")
@@ -97,7 +126,7 @@ def gaussian_generator(cam_infos, cam_intrinsics, num_points, image_depth_scale_
         normal = normal_map[ys, xs, :]
         depth = depth_map[ys, xs]
 
-        depth = depth * image_depth_scale_map[cam_info.image_id]["estimated_scale"]
+        depth = depth * depth_scale
 
         camera_coords = np.stack([(xs - cx) / fx * depth, (ys - cy) / fy * depth, depth], axis=0)
 
