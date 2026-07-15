@@ -31,6 +31,13 @@ class ArrayImage:
 
 
 class DensePriorUtilsTests(unittest.TestCase):
+    def test_preserves_dotted_image_stem_for_prior_paths(self):
+        self.assertEqual(
+            utils.prior_file_stem("/dataset/images/frame-000000.color.jpg"),
+            "frame-000000.color",
+        )
+        self.assertEqual(utils.prior_file_stem("simple.png"), "simple")
+
     def test_validates_image_id_order_and_colors(self):
         image_a = np.zeros((8, 10, 3), dtype=np.uint8)
         image_a[..., 0] = 200

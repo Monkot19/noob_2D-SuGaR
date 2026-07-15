@@ -29,6 +29,7 @@ from scene.gaussian_model import BasicPointCloud
 from scene.point_generator import gaussian_generator
 from scene.dense_prior_utils import (
     estimate_depth_scale,
+    prior_file_stem,
     reshape_confidence,
     sanitize_normals,
     validate_dense_image_order,
@@ -132,7 +133,7 @@ def readColmapCameras(cam_extrinsics, cam_intrinsics, images_folder):
             assert False, "Colmap camera model not handled: only undistorted datasets (PINHOLE or SIMPLE_PINHOLE cameras) supported!"
 
         image_path = os.path.join(images_folder, os.path.basename(extr.name))
-        image_name = os.path.basename(image_path).split(".")[0]
+        image_name = prior_file_stem(image_path)
         image = Image.open(image_path)
 
         depth_path = os.path.join(os.path.dirname(images_folder), "estimated_dense_depth", f"{image_name}.npy")

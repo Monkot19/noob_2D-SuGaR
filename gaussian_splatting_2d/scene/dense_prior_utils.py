@@ -1,5 +1,12 @@
+from pathlib import Path
+
 import cv2
 import numpy as np
+
+
+def prior_file_stem(image_path):
+    """Return the image basename with only its final suffix removed."""
+    return Path(image_path).stem
 
 
 def _unit_rgb(image):
