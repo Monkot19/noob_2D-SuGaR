@@ -31,6 +31,20 @@ class ArrayImage:
 
 
 class DensePriorUtilsTests(unittest.TestCase):
+    def test_disables_initialization_prior_when_loading_trained_scene(self):
+        self.assertEqual(
+            utils.initialization_prior_for_scene_load(
+                "monocular_depth_normal", None
+            ),
+            "monocular_depth_normal",
+        )
+        self.assertEqual(
+            utils.initialization_prior_for_scene_load(
+                "monocular_depth_normal", 30000
+            ),
+            "",
+        )
+
     def test_preserves_dotted_image_stem_for_prior_paths(self):
         self.assertEqual(
             utils.prior_file_stem("/dataset/images/frame-000000.color.jpg"),

@@ -193,3 +193,10 @@ def sanitize_normals(normals, fallback_normals=None, eps=1e-8):
         fallback, _ = sanitize_normals(fallback_normals, None, eps)
         normals[~valid] = fallback[~valid]
     return normals, int((~valid).sum())
+
+
+def initialization_prior_for_scene_load(initialization_prior, loaded_iteration):
+    """Disable point-cloud initialization when loading a trained iteration."""
+    if loaded_iteration is not None:
+        return ""
+    return initialization_prior
