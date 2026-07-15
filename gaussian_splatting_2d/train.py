@@ -51,8 +51,10 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
     viewpoint_stack = None
     ema_loss_for_log = 0.0
+    ema_total_loss_for_log = 0.0
     ema_dist_for_log = 0.0
     ema_normal_for_log = 0.0
+    ema_normal_prior_for_log = 0.0
 
     progress_bar = tqdm(range(first_iter, opt.iterations), desc="Training progress")
     first_iter += 1
@@ -114,15 +116,28 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         with torch.no_grad():
             # Progress bar
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
+            ema_total_loss_for_log = (
+                0.4 * total_loss.item() + 0.6 * ema_total_loss_for_log
+            )
             ema_dist_for_log = 0.4 * dist_loss.item() + 0.6 * ema_dist_for_log
             ema_normal_for_log = 0.4 * normal_loss.item() + 0.6 * ema_normal_for_log
+            normal_prior_value = (
+                normal_prior_loss.item()
+                if torch.is_tensor(normal_prior_loss)
+                else float(normal_prior_loss)
+            )
+            ema_normal_prior_for_log = (
+                0.4 * normal_prior_value + 0.6 * ema_normal_prior_for_log
+            )
 
 
             if iteration % 10 == 0:
                 loss_dict = {
                     "Loss": f"{ema_loss_for_log:.{5}f}",
+                    "total": f"{ema_total_loss_for_log:.{5}f}",
                     "distort": f"{ema_dist_for_log:.{5}f}",
                     "normal": f"{ema_normal_for_log:.{5}f}",
+                    "normal_prior": f"{ema_normal_prior_for_log:.{5}f}",
                     "Points": f"{len(gaussians.get_xyz)}"
                 }
                 progress_bar.set_postfix(loss_dict)
@@ -135,6 +150,16 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             if tb_writer is not None:
                 tb_writer.add_scalar('train_loss_patches/dist_loss', ema_dist_for_log, iteration)
                 tb_writer.add_scalar('train_loss_patches/normal_loss', ema_normal_for_log, iteration)
+                tb_writer.add_scalar(
+                    'train_loss_patches/normal_prior_loss',
+                    ema_normal_prior_for_log,
+                    iteration,
+                )
+                tb_writer.add_scalar(
+                    'train_loss_patches/total_loss_with_priors',
+                    ema_total_loss_for_log,
+                    iteration,
+                )
 
             training_report(tb_writer, iteration, Ll1, loss, l1_loss, iter_start.elapsed_time(iter_end), testing_iterations, scene, render, (pipe, background))
             if iteration in saving_iterations or iteration in opt.cluster_prune_iterations:
